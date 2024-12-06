@@ -199,9 +199,10 @@ def comp_and_show_rpm(x: list[int], y: list[float]):
         return
     degree_per_frame = theil(np.array(x), np.array(y))
     s_per_frame = 1 / (check_rpm / 60 / 4)
-    # 1、求每帧增量的度数，其旋转一圈需要多久时间
-    # 2、转换为RPM（60s）后会有多少圈
-    # 3、60s /（每圈多少秒）= 60s中转了多少圈
+    # 1、每帧（与检测频率的差异）度数 = D
+    # 2、差异度数旋转一圈需要多久时间s = T
+    # 3、差异速度60s内会转少圈 = 60 / T = R
+    # 4、R 为比检测频率多或少的RPM
     rpm = abs(60 / (360 / degree_per_frame * s_per_frame))
     # rpm = abs(0.1666666667 * degree_per_frame / s_per_frame)
     # rpm = abs(slope / s_per_frame * 60 / 360)
