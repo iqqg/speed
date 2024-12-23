@@ -11,8 +11,8 @@ import numpy as np
 import math
 import sys
 
-id = 153064369
-check_rpm = 11250
+id = 165024096
+check_rpm = 12000
 direction = 'z'
 
 # {车号}_{区域机台号}_{机台锭号}_{上/下}_{转速}_{月日}_req.json
@@ -62,13 +62,10 @@ temp_path = os.path.join(cache_path, 'temp')
 
 def theil(x, y):
     from sklearn.linear_model import TheilSenRegressor
-
     # 创建泰尔森回归模型
-    model = TheilSenRegressor(random_state=0)
-
+    model = TheilSenRegressor(max_iter=1000, random_state=0)
     # 训练模型
     model.fit(x[:, np.newaxis], y)
-
     # 获取回归线的斜率和截距
     slope = model.coef_[0]
     # median = np.median(x)
@@ -82,12 +79,12 @@ def show_theil(x, y):
     import matplotlib.pyplot as plt
     from sklearn.linear_model import TheilSenRegressor
     # 创建泰尔森回归模型
-    model = TheilSenRegressor(random_state=0)
+    model = TheilSenRegressor(max_iter=1000, random_state=0)
     # 训练模型
     model.fit(x[:, np.newaxis], y)
     # 获取回归线的斜率和截距
     slope = model.coef_[0]
-    plt.text(0, 0, f'{slope}')
+    plt.text(10, 10, f'{slope}')
     intercept = model.intercept_
     # 绘制数据点
     plt.scatter(x, y, color='blue', label='Data points')
@@ -106,17 +103,13 @@ def show_theil(x, y):
 def draw_degree(x, y, mid_x, font, draw, bottom):
     if len(x) <= 2:
         return
-    slope = theil(np.array(x), np.array(y))
-    s_per_frame = 1 / (check_rpm / 60 / 4)
-    rpm = abs(slope / s_per_frame * 60 / 360)
+    rpm = comp_rpm(np.array(x), np.array(y))
     coord_text = f"o_rpm:{int(rpm)}"
     bottom += 20
     draw.text((mid_x, bottom), coord_text,
               fill='yellow', font=font, stroke_fill='black', stroke_width=4)
     # 静态转速误差
-    rpm += -7 if slope > 0 else 7
-    result = check_rpm - rpm
-    coord_text = f"r_rpm:{int(result)}"
+    coord_text = f"r_rpm:{int(rpm)}"
     bottom += 20
     draw.text((mid_x, bottom), coord_text,
               fill='yellow', font=font, stroke_fill='black', stroke_width=4)
@@ -178,43 +171,45 @@ def read_degree(id):
         y.append(degree)
         x.append(info['frameId'])
 
+
 def show_rpm(degrees: list[float], frames: list[float]):
     x = list()
     y = list()
     for i, d in enumerate(degrees):
         if d == -1:
-            comp_and_show_rpm(x, y)
+            comp_rpm(x, y)
+            show_theil(np.array(x), np.array(y))
             x = list()
             y = list()
             continue
         y.append(d)
         x.append(frames[i])
     if len(x) > 0:
-        comp_and_show_rpm(x, y)
+        comp_rpm(x, y)
+        show_theil(np.array(x), np.array(y))
     pass
 
 
-def comp_and_show_rpm(x: list[int], y: list[float]):
+def comp_rpm(x: list[int], y: list[float]) -> float:
     if len(x) < 3:
-        return
+        return -1
     degree_per_frame = theil(np.array(x), np.array(y))
     s_per_frame = 1 / (check_rpm / 60 / 4)
-    # 1、每帧（与检测频率的差异）度数 = D
-    # 2、差异度数旋转一圈需要多久时间s = T
-    # 3、差异速度60s内会转少圈 = 60 / T = R
-    # 4、R 为比检测频率多或少的RPM
-    rpm = abs(60 / (360 / degree_per_frame * s_per_frame))
-    # rpm = abs(0.1666666667 * degree_per_frame / s_per_frame)
-    # rpm = abs(slope / s_per_frame * 60 / 360)
+    rpm = abs(degree_per_frame / s_per_frame * 60 / 360)
+    result = comp_direction(rpm, degree_per_frame)
+    print(
+        f'测量频率：{check_rpm} 锭杯捻向：{direction} 测量结果：{result} 转速差：{rpm} 每帧角度：{degree_per_frame}')
+    return result
+
+
+def comp_direction(rpm, degree_per_frame):
     if 'z' in direction:
-        rpm += 7 if degree_per_frame > 0 else -7
-        result = check_rpm + (rpm if degree_per_frame > 0  else -rpm)
+        # rpm += 7
+        result = check_rpm + (rpm if degree_per_frame > 0 else -rpm)
     else:
-        rpm += -7 if degree_per_frame > 0 else 7
-        result = check_rpm + (-rpm if degree_per_frame > 0  else rpm)
-    result = round(result, 1)
-    print(f'测量频率{check_rpm} 锭杯捻向{direction}\n 测量结果{result} 转速差{rpm} 每帧角度{degree_per_frame}')
-    show_theil(np.array(x), np.array(y))
+        # rpm -= 7
+        result = check_rpm + (-rpm if degree_per_frame > 0 else rpm)
+    return round(result, 1)
 
 
 def read_cup(id):
@@ -224,6 +219,119 @@ def read_cup(id):
         data = json.load(file)
     return data
 
+def comp_cups2(data, name):
+    x = list()
+    y = list()
+
+    # 确保有一个目录来保存下
+    if not os.path.exists(cache_path):
+        os.makedirs(cache_path)
+
+    counter = 0
+    for image_info in data['img']:
+        counter += 1
+        url = 'https://gemi-mes.oss-cn-hangzhou.aliyuncs.com/d/woven/robot-yb-c9-1/robot/twister/yarnpic/' + \
+            image_info['url']
+        image_path = os.path.join(cache_path, f'original_{counter:03d}.jpg')
+        if not os.path.exists(image_path):
+            response = requests.get(url)
+            if response.status_code == 200:
+                with open(image_path, 'wb') as f:
+                    f.write(response.content)
+            else:
+                exit(-1)
+
+        # 打开图片
+        img = Image.open(image_path)
+        # 如果图片是黑白的，转换为RGB
+        if img.mode == 'L':
+            img = img.convert('RGB')
+        # draw = ImageDraw.Draw(Image.new('RGB', (400, 300), color = (255, 255, 255)))
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.truetype("arial.ttf", 20)
+
+        spindle_mid_x = 0
+        spindle_bottom_width = 0
+        spindle_bottom_left = 0
+        left = 0
+        top = 0
+        right = 0
+        bottom = 0
+        mid_x = 0
+        if len(image_info['box']) < 2:
+            draw_degree(x, y, mid_x, font, draw, bottom)
+            show_theil(np.array(x), np.array(y))
+            x = list()
+            y = list()
+            pass
+        # 绘制矩形框
+        for box in image_info['box']:
+            if box['label'] != 0 and box['label'] != 1:
+                lefts = box['left']
+                tops = box['top']
+                rights = left + box['width']
+                bottoms = top + box['height']
+                draw.rectangle(((lefts, tops), (rights, bottoms)),
+                               outline='white', width=1)
+                continue
+            left = box['left']
+            top = box['top']
+            right = left + box['width']
+            bottom = top + box['height']
+            # 计算垂直线的x坐标
+            mid_x = left + box['width'] / 2
+            # 绘制垂直线
+            draw.line(((mid_x, top - 50), (mid_x, bottom + 50)),
+                      fill='red', width=1)
+            if box['label'] == 0:
+                draw.rectangle(((left, top), (right, bottom)),
+                               outline='white', width=1)
+                spindle_mid_x = mid_x
+                # new_height_offset = (box['height'] - box['height'] * ratio)
+                new_width_offset = (box['width'] - box['width'] * ratio) / 2
+                left += new_width_offset
+                right -= new_width_offset
+                top = bottom - 45
+                spindle_bottom_width = box['width'] * ratio
+                spindle_bottom_left = spindle_mid_x - spindle_bottom_width/2
+                draw.line(((left, top), (right, top)), fill='green', width=6)
+                coord_text = f"width:{spindle_bottom_width}"
+                draw.text((left, top - 25), coord_text,
+                          fill='yellow', font=font, stroke_fill='black', stroke_width=4)
+            else:
+                draw.rectangle(((left, top), (right, bottom)),
+                               outline='white', width=1)
+                coord_text = f"mid_x:{mid_x - spindle_mid_x}"
+                bottom += 50
+                draw.text((mid_x, bottom), coord_text,
+                          fill='yellow', font=font, stroke_fill='black', stroke_width=4)
+                radian = (mid_x-spindle_bottom_left)/spindle_bottom_width   
+                if radian > 1:
+                    radian = 1
+                elif radian < -1:
+                    radian = -1
+                degree = 180-math.degrees(math.asin(radian))*2
+                coord_text = f"degree:{round(degree, 3)}"
+                bottom += 20
+                draw.text((mid_x, bottom), coord_text,
+                          fill='yellow', font=font, stroke_fill='black', stroke_width=4)
+                # if degree > 130 or degree < 50:
+                #     continue
+                y.append(degree)
+                x.append(counter)
+
+                # if len(x) == 5:
+                #     y.append(58.73837580853305)
+                #     x.append(6)
+                draw_degree(x, y, mid_x, font, draw, bottom)
+
+        # 保存绘制后的图片
+        output_path = os.path.join(
+            temp_path, f'{img_prefix}{counter:02d}_{name}.jpg')
+        img.save(output_path)
+
+    show_theil(np.array(x), np.array(y))
+    print("图片下载和绘制完成。")
 
 def comp_cups(data, name):
     x = list()
@@ -258,6 +366,7 @@ def comp_cups(data, name):
 
         spindle_mid_x = 0
         spindle_bottom_width = 0
+        spindle_bottom_left = 0
         left = 0
         top = 0
         right = 0
@@ -283,13 +392,11 @@ def comp_cups(data, name):
             top = box['top']
             right = left + box['width']
             bottom = top + box['height']
-
             # 计算垂直线的x坐标
             mid_x = left + box['width'] / 2
             # 绘制垂直线
             draw.line(((mid_x, top - 50), (mid_x, bottom + 50)),
                       fill='red', width=1)
-
             if box['label'] == 0:
                 draw.rectangle(((left, top), (right, bottom)),
                                outline='white', width=1)
@@ -299,9 +406,9 @@ def comp_cups(data, name):
                 left += new_width_offset
                 right -= new_width_offset
                 top = bottom - 45
-                spindle_bottom_width = round(box['width'] * ratio, 1)
+                spindle_bottom_width = box['width'] * ratio
+                spindle_bottom_left = spindle_mid_x - spindle_bottom_width/2
                 draw.line(((left, top), (right, top)), fill='green', width=6)
-
                 coord_text = f"width:{spindle_bottom_width}"
                 draw.text((left, top - 25), coord_text,
                           fill='yellow', font=font, stroke_fill='black', stroke_width=4)
@@ -312,8 +419,7 @@ def comp_cups(data, name):
                 bottom += 50
                 draw.text((mid_x, bottom), coord_text,
                           fill='yellow', font=font, stroke_fill='black', stroke_width=4)
-
-                radian = (mid_x - spindle_mid_x)/spindle_bottom_width*2
+                radian = (mid_x - spindle_mid_x)/(spindle_bottom_width/2)
                 if radian > 1:
                     radian = 1
                 elif radian < -1:
@@ -338,7 +444,6 @@ def comp_cups(data, name):
             temp_path, f'{img_prefix}{counter:02d}_{name}.jpg')
         img.save(output_path)
 
-    # 假设我们有一组数据
     show_theil(np.array(x), np.array(y))
     print("图片下载和绘制完成。")
 
@@ -464,11 +569,20 @@ def verifyFrameAngleOverlimit(degrees: list[float], true_rpm: int, detect_rpm: i
         return True
     return False
 
+
+def inc_degree_to_rpm(degree_per_frame: float):
+    s_per_frame = 1 / (check_rpm / 60 / 4)
+    # 形式改变，避免分母为0：rpm = 60 / (360 / degree_per_frame * s_per_frame)
+    rpm = 60 / 360 * degree_per_frame / s_per_frame
+    result = comp_direction(rpm, s_per_frame)
+    print(
+        f'每帧角度差{degree_per_frame}° 测量频率{check_rpm} 捻向{direction} 总转速差{rpm} 检测结果{result}')
+
 # 读取角度文件进行计算
 # read_degree(local_batch_no)
 # hole_visibility_per_spindle_area(0.18, 0.45, 12100, 12200, 4)
 
-(1/(11250/240)/360)
+
 # # 计算转速与角度的关系
 # -542
 # rpm_degree_per_frame(12458, 13000, 4)
@@ -486,19 +600,39 @@ def verifyFrameAngleOverlimit(degrees: list[float], true_rpm: int, detect_rpm: i
 # rpm_degree_per_frame(10700, 11000, 4)
 
 # -440
-# rpm_degree_per_frame(10000, 10300, 4)
+# rpm_degree_per_frame(10900, 11000, 4)
 
-# rpm_degree_per_frame(11043, 10550, 4)
-
+rpm_degree_per_frame(8850, 9000, 4)
 
 # # 读取apass的请求进行计算
 # init_output_folder()
 # comp_cups(read_req_cups(
 #     svr_reqs_files[id], id), id)
 
-# 读取apass的文本
-degree_str = " -1/-1/-1/-1/169.91/126.68/93.76/71.14/38.22/-1/-1/-1/-1/-1/-1/-1/-1/140.84/114.62/81.08"
-degree = [float(item) for item in str.split(degree_str, "/")]
-frames = range(len(degree))
-show_rpm(degree, frames)
+# diameter = int(380*0.5294)
+# radius = int(diameter / 2)
+# for r in range(0, diameter):
+#     x = (r-radius)/radius
+#     res = math.degrees(math.acos(x))
+#     print(f'角度：{res}° 临边：{r}')
+#     inc_degree_to_rpm(res)
+
+# # 读取apass的文本
+# degree_str = "33.55/89.11/140.55"
+# degree = [float(item) for item in str.split(degree_str, "/")]
+# frames = range(len(degree))
+# show_rpm(degree, frames)
+
+
 # print(verifyFrameAngleOverlimit(degree, 11000, 11300, 4))
+
+# radius = 380*0.5294 / 2
+# x = (radius-1)/radius
+# res = math.degrees(math.acos(x))
+# print(f'角度：{res}° 半径：{radius}')
+# inc_degree_to_rpm(res)
+
+# x = (radius)/radius
+# res = math.degrees(math.acos(x))
+# print(f'角度：{res}° 半径：{radius}')
+# inc_degree_to_rpm(res)
